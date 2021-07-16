@@ -1,0 +1,191 @@
+#!/bin/bash
+#    check-and-monitor - check and monitor connections or anything
+#
+#    Copyright (C) 2021 luc.deschenaux@freesurf.ch
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU Affero General Public License as published
+#    by the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+# 
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU Affero General Public License for more details.
+# 
+#    You should have received a copy of the GNU Affero General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+timeout=10
+interval=60
+failures=0
+failures_threshold=3
+successes=0
+successes_threshold=0
+hasfailed=dunno
+notified=no
+monitor_success=86400
+monitor_failure=86400
+notify=notify-send
+notify_success='$notify "Connection to $1:$2 succeeded!"'
+notify_failure='$notify "Connection to $1:$2 failed!"'
+nc='nc -w $timeout -v -z $1 $2 2>&1'
+command="$nc"
+
+usage() {
+cat << EOF
+NAME
+       $(basename $0) - monitor connection to tcp server or anything
+
+SYNOPSIS
+       $(basename $0) [OPTION]... [<server> <port>]
+
+DESCRIPTION
+       Unless you specify something else to check (using the --command option
+       below), this command will check tcp connection to <server> <port>
+       every <--interval> seconds, run notification command after <--failures>
+       attempts, and forces re-notification after <--monitor> seconds.
+       All the options below are optional.
+
+       -h, --help
+
+       -i, --interval <$interval> 
+               sleep interval between attempts
+
+       -t, --timeout  <$timeout>
+               attempt timeout in seconds
+
+       -f, --failures <$failures_threshold>
+               notify failure after specified failed attempts
+
+       -s, --successes <$successes_threshold>
+               notify success after specified succeeded attempts
+       
+       -n, --notify-command <notify-send>
+               default command for --notify-success and --notify-failure
+
+       -T, --notify-success <'\$notify "Connection to \$1:\$2 succeeded!"'>
+               command for notifying successful attempts
+
+       -G, --notify-failure <'\$notify "Connection to \$1:\$2 failed!"'>
+               command for notifying failed attempts
+
+       -v, --verbose
+               report command output not only on status change
+
+       -m, --monitor <86400>
+                seconds before success or failure re-notification
+       
+       -S, --monitor-success <$monitor_success>
+                seconds before success re-notification
+
+       -F, --monitor-failure <$monitor_failure> 
+                seconds before failure re-notification
+
+       -c, --command <'nc -w \$timeout -v -z \$1 \$2 2>&1'>
+                Command to run for checking whatever the check.
+                When you change this for something where \$1 and \$2 means
+                anything else than host:port you need to set -T and -G.
+
+EOF
+exit 1
+}
+
+# parse command line options
+if ! options=$(getopt -o hi:t:f:s:vm:S:F:n:T:G:c: -l help,interval:,timeout:,failures:,successes:,verbose,monitor:,monitor-success:,monitor-failure:,notify-command:,notify-success:,notify-failure:,command: -- "$@")
+then
+    # something went wrong, getopt will put out an error message for us
+    exit 1
+fi
+
+eval set -- "$options"
+
+while [ $# -gt 0 ] ; do
+    case $1 in
+    -h|--help) usage ;;
+    -i|--interval) interval=$2 ; shift ;;
+    -t|--timeout) timeout=$2 ; shift ;;
+    -f|--failures) failures_threshold=$2 ; shift ;;
+    -s|--successes) successes_threshold=$2 ; shift ;;
+    -v|--verbose) verbose=yes ;;
+    -m|--monitor) monitor_success=$2 ; monitor_failure=$2 ; shift ;;
+    -S|--monitor-success) monitor_success=$2 ; shift ;;
+    -F|--monitor-failure) monitor_failure=$2 ; shift ;;
+    -n|--notify-command) notify=$2 ; shift ;;
+    -T|--notify-success) notify_success=$2 ; shift ;;
+    -G|--notify-failure) notify_failure=$2 ; shift ;;
+    -c|--command) command=$2 ; shift ;;
+    (--) shift; break;;
+    (-*) echo "$(basename $0): error - unrecognized option $1" 1>&2; exit 1;;
+    (*) break;;
+    esac
+    shift
+done
+
+if [ "$command" = "$nc" ] ; then
+  if [ $# -lt 2 ];then
+    usage
+    exit 1;
+  fi
+else 
+  echo "INFO: command line parameters: $@"
+fi
+
+check(){
+	t0=$(date +%s.%N)
+  result=$(eval $command)
+  command_exit_code="$?"
+  t1=$(date +%s.%N)
+  t=$(bc <<< "$t1-$t0")
+  status="$result ($(printf %f $t)s)"
+  [ -n "$verbose" ] && echo $status
+}
+
+#set -x
+notified_at=0
+while true ; do
+  now=$(date +%s)
+  notified_since=$(expr $now - $notified_at)
+  check "$@"
+  if [ $command_exit_code -eq 0 ]; then
+    ((successes++))
+    if [ $successes -gt $successes_threshold ] ; then
+      [ $notified_since -gt $monitor_success ] && notified=no
+      if [ $hasfailed = yes -o $notified = no ] ; then
+        [ -z "$verbose" ] && echo $status
+        eval $notify_success
+        notify_exit_code=$?
+        if [ $notify_exit_code -eq 0 ] ; then
+          notified=yes
+          notified_at=$(date +%s)
+        else
+          notified=no
+          echo "ERROR: success notification failed ! ($notify_exit_code)" >& 2
+        fi
+      fi
+      hasfailed=no
+      failures=0
+    fi
+  else
+    ((failures++))
+    if [ $failures -gt $failures_threshold ] ; then
+      [ $hasfailed != yes ] && notified=no
+      [ $notified_since -gt $monitor_failure ] && notified=no
+      if [ $notified = no ] ; then
+        [ -z "$verbose" ] && echo $status
+        eval $notify_failure
+        notify_exit_code=$?
+        if [ $notify_exit_code -eq 0 ] ; then
+          notified=yes
+          notified_at=$(date +%s)
+        else
+          notified=no
+          echo "ERROR: failure notification failed ! ($notify_exit_code)" >& 2
+        fi
+      fi
+      hasfailed=yes
+      successes=0
+    fi
+  fi
+  sleep $interval
+done
