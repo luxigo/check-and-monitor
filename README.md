@@ -13,15 +13,15 @@
 check-and-monitor foo.org 80 \
   --monitor-failure 3600 \
   --notify-success \
-      'mail foo@bar.org -s "Connection to $1:$2 succeeded!" <<< "www is up"' \
+      'mail foo@bar.org -s "Connection to $1:$2 succeeded!" <<< "$(traceroute -m 1 $1)"' \
   --notify-failure \
-      'mail foo@bar.org -s "Connection to $1:$2 failed!" <<< "www is down"'
+      'mail foo@bar.org -s "Connection to $1:$2 failed!" <<< "$(traceroute $1)"'
 ```
 
 ```
 # This will check every 60 seconds if /mnt/backup is mounted.
 # A notification is displayed every 2 minutes if not mounted,
-# nothing will be displayed if already mounted. 
+# nothing will be displayed if already mounted.
 check-and-monitor \
    --command 'mountpoint $1 2>&1' \
    --notify-success '' \
@@ -50,7 +50,10 @@ DESCRIPTION
 
        -h, --help
 
-       -i, --interval <60> 
+       -l, --load-config <filename>
+               load configuration from file
+
+       -i, --interval <60>
                sleep interval between attempts
 
        -t, --timeout  <10>
@@ -62,30 +65,62 @@ DESCRIPTION
        -s, --successes <0>
                notify success after specified succeeded attempts
 
-       -T, --notify-success <'notify-send "Connection to $1:$2 successed!"'>
-               command for notifying successful attempts
-
-       -G, --notify-failure <'notify-send "Connection to $1:$2 failed!"'>
-               command for notifying failed attempts
-               if not specified with -T, notify-success will be unset.
-
        -n, --notify-command <notify-send>
                default command for --notify-success and --notify-failure
 
+       -Y, --notify-success <'$notify "Connection to $1:$2 succeeded!"'>
+               command for notifying successful attempts
+
+       -N, --notify-failure <'$notify "Connection to $1:$2 failed!"'>
+               command for notifying failed attempts
+
        -v, --verbose
-               print command output not only on status change
+               report command output not only on status change
 
        -m, --monitor <86400>
                 seconds before success or failure re-notification
-       
+
        -S, --monitor-success <86400>
                 seconds before success re-notification
 
-       -F, --monitor-failure <86400> 
+       -F, --monitor-failure <86400>
                 seconds before failure re-notification
 
        -c, --command <'nc -w $timeout -v -z $1 $2 2>&1'>
                 Command to run for checking whatever the check.
                 When you change this for something where $1 and $2 means
-                anything else than host:port you need to set -T and -G.
+                anything else than host:port you need to set -Y and -N.
+
+CONFIGURATION FILE
+       When file ~/.check-and-monitor.conf exists it is evaluated before
+       command line options.
+       Command line options override settings from ~/..check-and-monitor.conf.
+
+       You can also specify a configuration file with -l|--load-config.
+       Options specified after -l will override settings from the config file.
+
+       DEFAULT CONFIGURATION:
+           timeout=10
+           interval=60
+           failures_threshold=3
+           successes_threshold=0
+           monitor_success=86400
+           monitor_failure=86400
+           notify=notify-send
+           notify_success='$notify "Connection to $1:$2 succeeded!"'
+           notify_failure='$notify "Connection to $1:$2 failed!"'
+           command='nc -w $timeout -v -z $1 $2 2>&1'
+
+       EXAMPLE CONFIGURATION FILE:
+           dest=user@host
+           mail-send() {
+               if [ $command_exit_code -eq 0 ] ; then
+                  msg=$(traceroute -m 1 ${argv[0]})
+                else
+                  msg=$(traceroute ${argv[0]})
+               fi
+               mail $dest -s "$1" <<< "msg"
+             }
+           notify=mail-send
+
 ```
