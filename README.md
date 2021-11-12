@@ -120,7 +120,7 @@ CONFIGURATION FILE
                   msg=$(traceroute ${argv[0]})
                fi
                mail $dest -s "$1" <<< "msg"
-             }
+           }
            notify=mail-send
 
 ```
